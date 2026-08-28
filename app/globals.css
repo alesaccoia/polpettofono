@@ -26,6 +26,7 @@ button { font: inherit; cursor: pointer; }
 .seq-step:hover { transform: translateY(-2px); border-color: rgba(239,238,230,.9); }
 .seq-step i { width: 18px; height: 18px; border: 4px solid var(--step-color); border-radius: 50%; background: color-mix(in srgb, var(--step-color) 22%, transparent); box-shadow: 0 0 19px color-mix(in srgb, var(--step-color) 30%, transparent); }
 .seq-step.empty i { display: none; }
+.seq-step.armed { outline: 2px solid var(--orange); outline-offset: -4px; }
 .seq-step.playing { background: rgba(255,107,74,.14); border-color: var(--orange); box-shadow: inset 0 -3px 0 var(--orange); }
 .seq-controls { display: flex; justify-content: center; align-items: center; gap: 9px; padding-top: 13px; }
 .icon-button { width: 38px; height: 38px; border: 1px solid rgba(239,238,230,.37); border-radius: 50%; padding: 0; display: grid; place-items: center; background: transparent; color: #efeee6; font-size: 16px; transition: transform .18s, background .18s, border-color .18s; }

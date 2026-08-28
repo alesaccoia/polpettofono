@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 type Point = { x: number; y: number };
 type SoundZone = { id: string; part: string; name: string; color: string; x: number; y: number; radius: number; file: string };
+type PatternStep = { point: Point; weights: number[] } | null;
 type AudioRig = { context: AudioContext; node: AudioWorkletNode; gain: GainNode; fxWet: GainNode };
 
 const zones: SoundZone[] = [
@@ -12,6 +13,15 @@ const zones: SoundZone[] = [
   { id: 'graffio', part: 'divano', name: 'Graffio', color: '#54c7b7', x: 76, y: 72, radius: 22, file: '/audio/scratch.wav' },
   { id: 'scoreggina', part: 'coda', name: 'Scoreggina', color: '#9776f2', x: 27, y: 78, radius: 24, file: '/audio/fart.wav' },
 ];
+
+function makeZoneStep(zoneIndex: number): PatternStep {
+  return { point: { x: zones[zoneIndex].x, y: zones[zoneIndex].y }, weights: zones.map((_, index) => index === zoneIndex ? 1 : 0) };
+}
+
+function strongestZoneIndex(step: PatternStep) {
+  if (!step) return null;
+  return step.weights.reduce((best, weight, index) => weight > step.weights[best] ? index : best, 0);
+}
 
 // Short STFT/phase-vocoder one-shot engine. The source is read forward once;
 // release() trims the current phrase when the pointer leaves the photo.
@@ -77,8 +87,8 @@ function scheduleRhythm(audio: AudioRig, step: number) {
 
 export default function Home() {
   const [active, setActive] = useState<Point>({ x: 47, y: 40 }); const [weights, setWeights] = useState([1, 0, 0, 0]);
-  const [sequence, setSequence] = useState<Array<number | null>>([3, 1, 3, 0, 3, 1, 3, 0]); const [isSequencing, setIsSequencing] = useState(false); const [sequencerStep, setSequencerStep] = useState(-1);
-  const [harmonyOn, setHarmonyOn] = useState(false); const [rhythmOn, setRhythmOn] = useState(false); const [decay, setDecay] = useState(0.5); const [isMuted, setIsMuted] = useState(false); const audioRef = useRef<AudioRig | null>(null); const sequenceRef = useRef(sequence); const rhythmTimerRef = useRef<number | null>(null); const isHoldingRef = useRef(false); const harmonyRef = useRef(false); const muteRef = useRef(false); const decayRef = useRef(decay);
+  const [sequence, setSequence] = useState<PatternStep[]>(() => [3, 1, 3, 0, 3, 1, 3, 0].map(makeZoneStep)); const [armedStep, setArmedStep] = useState<number | null>(null); const [isSequencing, setIsSequencing] = useState(true); const [sequencerStep, setSequencerStep] = useState(-1);
+  const [harmonyOn, setHarmonyOn] = useState(true); const [rhythmOn, setRhythmOn] = useState(true); const [decay, setDecay] = useState(0.5); const [isMuted, setIsMuted] = useState(false); const audioRef = useRef<AudioRig | null>(null); const sequenceRef = useRef(sequence); const rhythmTimerRef = useRef<number | null>(null); const isHoldingRef = useRef(false); const harmonyRef = useRef(true); const muteRef = useRef(false); const decayRef = useRef(decay);
   const activeZone = useMemo(() => zones.reduce((best, zone, index) => weights[index] > weights[zones.indexOf(best)] ? zone : best, zones[0]), [weights]);
 
   const startAudio = useCallback(async () => {
@@ -91,25 +101,26 @@ export default function Home() {
   }, []);
   const triggerWeights = useCallback(async (nextWeights: number[]) => { const audio = await startAudio(); audio.node.port.postMessage({ type: 'trigger', weights: nextWeights, decay: decayRef.current }); }, [startAudio]);
   const releaseSound = useCallback(() => { audioRef.current?.node.port.postMessage({ type: 'release' }); }, []);
-  const playPoint = useCallback(async (point: Point) => { const nextWeights = normalizedWeights(point); setActive(point); setWeights(nextWeights); await triggerWeights(nextWeights); }, [triggerWeights]);
-  const triggerZone = useCallback(async (zoneIndex: number) => { const zone = zones[zoneIndex]; await playPoint({ x: zone.x, y: zone.y }); }, [playPoint]);
+  const playWeights = useCallback(async (point: Point, nextWeights: number[]) => { setActive(point); setWeights(nextWeights); await triggerWeights(nextWeights); }, [triggerWeights]);
+  const playPoint = useCallback(async (point: Point) => { const nextWeights = normalizedWeights(point); if (armedStep !== null) setSequence((current) => current.map((step, index) => index === armedStep ? { point, weights: nextWeights } : step)); await playWeights(point, nextWeights); }, [armedStep, playWeights]);
+  const triggerSequenceStep = useCallback(async (stepIndex: number) => { const step = sequenceRef.current[stepIndex]; if (step) await playWeights(step.point, step.weights); }, [playWeights]);
   const toggleSequencer = useCallback(async () => { if (isSequencing) { setIsSequencing(false); setSequencerStep(-1); return; } await startAudio(); setIsSequencing(true); }, [isSequencing, startAudio]);
   const toggleRhythm = useCallback(async () => { if (rhythmOn) { setRhythmOn(false); return; } await startAudio(); setRhythmOn(true); }, [rhythmOn, startAudio]);
 
   useEffect(() => { sequenceRef.current = sequence; }, [sequence]); useEffect(() => { harmonyRef.current = harmonyOn; }, [harmonyOn]); useEffect(() => { muteRef.current = isMuted; }, [isMuted]); useEffect(() => { decayRef.current = decay; }, [decay]);
-  useEffect(() => { if (!isSequencing) return undefined; let cursor = 0; const tick = () => { const zoneIndex = sequenceRef.current[cursor]; setSequencerStep(cursor); if (zoneIndex !== null) void triggerZone(zoneIndex); cursor = (cursor + 1) % sequenceRef.current.length; }; tick(); const interval = window.setInterval(tick, 510); return () => window.clearInterval(interval); }, [isSequencing, triggerZone]);
+  useEffect(() => { if (!isSequencing) return undefined; let cursor = 0; const tick = () => { setSequencerStep(cursor); void triggerSequenceStep(cursor); cursor = (cursor + 1) % sequenceRef.current.length; }; tick(); const interval = window.setInterval(tick, 510); return () => window.clearInterval(interval); }, [isSequencing, triggerSequenceStep]);
   useEffect(() => { if (!rhythmOn) { if (rhythmTimerRef.current !== null) window.clearInterval(rhythmTimerRef.current); rhythmTimerRef.current = null; return undefined; } let step = 0; const tick = () => { if (audioRef.current) scheduleRhythm(audioRef.current, step); step = (step + 1) % 8; }; tick(); rhythmTimerRef.current = window.setInterval(tick, 510); return () => { if (rhythmTimerRef.current !== null) window.clearInterval(rhythmTimerRef.current); rhythmTimerRef.current = null; }; }, [rhythmOn]);
   useEffect(() => { if (audioRef.current) audioRef.current.gain.gain.value = isMuted ? 0 : 0.72; }, [isMuted]); useEffect(() => { if (audioRef.current) audioRef.current.fxWet.gain.value = harmonyOn ? 0.38 : 0; }, [harmonyOn]); useEffect(() => () => { audioRef.current?.context.close(); }, []);
 
   const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => { event.currentTarget.setPointerCapture(event.pointerId); isHoldingRef.current = true; const box = event.currentTarget.getBoundingClientRect(); void playPoint({ x: ((event.clientX - box.left) / box.width) * 100, y: ((event.clientY - box.top) / box.height) * 100 }).then(() => { if (!isHoldingRef.current) releaseSound(); }); };
   const handlePointerUp = () => { isHoldingRef.current = false; releaseSound(); };
-  const cycleStep = (index: number) => setSequence((current) => current.map((value, step) => step !== index ? value : value === null ? 0 : value === zones.length - 1 ? null : value + 1));
+  const selectStep = (index: number) => setArmedStep(index);
 
   return (
     <main className="site-shell">
       <button className="mute-button" onClick={() => setIsMuted((muted) => !muted)} aria-label={isMuted ? 'Attiva audio' : 'Disattiva audio'} aria-pressed={isMuted}>{isMuted ? '◌' : '◉'}</button>
       <section className="photo-stage"><div className="cat-photo-wrap" onPointerDown={handlePointerDown} onPointerUp={handlePointerUp} onPointerCancel={handlePointerUp} onLostPointerCapture={handlePointerUp} role="button" tabIndex={0} aria-label="Tocca la foto del gatto"><img src="/images/cat.jpg" alt="Il gatto del Cattofono" className="cat-photo" draggable={false} /><div className="photo-shade" /><div className="crosshair" style={{ left: `${active.x}%`, top: `${active.y}%` }}><span /><span /></div>{zones.map((zone) => <span key={zone.id} className={`epicenter ${activeZone.id === zone.id ? 'selected' : ''}`} style={{ left: `${zone.x}%`, top: `${zone.y}%`, '--zone-color': zone.color } as React.CSSProperties}><i /></span>)}</div></section>
-      <section className="sequencer-section" aria-label="Sequencer"><div className="seq-panel"><div className="seq-grid">{sequence.map((zoneIndex, index) => <button key={index} className={`seq-step ${sequencerStep === index ? 'playing' : ''} ${zoneIndex === null ? 'empty' : ''}`} onClick={() => cycleStep(index)} aria-label={`Step ${index + 1}: ${zoneIndex === null ? 'vuoto' : zones[zoneIndex].name}`} style={zoneIndex === null ? undefined : { '--step-color': zones[zoneIndex].color } as React.CSSProperties}>{zoneIndex !== null && <i />}</button>)}</div><div className="seq-controls"><button className={`icon-button play ${isSequencing ? 'active' : ''}`} onClick={() => void toggleSequencer()} aria-label={isSequencing ? 'Ferma sequencer' : 'Avvia sequencer'}>{isSequencing ? '■' : '▶'}</button><button className={`icon-button ${harmonyOn ? 'active' : ''}`} onClick={() => setHarmonyOn((value) => !value)} aria-label={harmonyOn ? 'Disattiva delay e riverbero' : 'Attiva delay e riverbero'} aria-pressed={harmonyOn}>♫</button><button className={`icon-button ${rhythmOn ? 'active' : ''}`} onClick={() => void toggleRhythm()} aria-label={rhythmOn ? 'Disattiva base ritmica' : 'Attiva base ritmica'} aria-pressed={rhythmOn}>♩</button><label className="decay-knob" style={{ '--decay-angle': `${-135 + decay * 270}deg` } as React.CSSProperties}><input type="range" min="0.12" max="1" step="0.01" value={decay} onChange={(event) => setDecay(Number(event.target.value))} aria-label="Decay globale" /></label></div></div></section>
+      <section className="sequencer-section" aria-label="Sequencer"><div className="seq-panel"><div className="seq-grid">{sequence.map((step, index) => { const zoneIndex = strongestZoneIndex(step); return <button key={index} className={`seq-step ${sequencerStep === index ? 'playing' : ''} ${armedStep === index ? 'armed' : ''} ${step === null ? 'empty' : ''}`} onClick={() => selectStep(index)} aria-label={`Step ${index + 1}: ${zoneIndex === null ? 'vuoto' : zones[zoneIndex].name}${armedStep === index ? ', selezionato' : ''}`} aria-pressed={armedStep === index} style={zoneIndex === null ? undefined : { '--step-color': zones[zoneIndex].color } as React.CSSProperties}>{step !== null && <i />}</button>; })}</div><div className="seq-controls"><button className={`icon-button play ${isSequencing ? 'active' : ''}`} onClick={() => void toggleSequencer()} aria-label={isSequencing ? 'Ferma sequencer' : 'Avvia sequencer'}>{isSequencing ? '■' : '▶'}</button><button className={`icon-button ${harmonyOn ? 'active' : ''}`} onClick={() => setHarmonyOn((value) => !value)} aria-label={harmonyOn ? 'Disattiva delay e riverbero' : 'Attiva delay e riverbero'} aria-pressed={harmonyOn}>♫</button><button className={`icon-button ${rhythmOn ? 'active' : ''}`} onClick={() => void toggleRhythm()} aria-label={rhythmOn ? 'Disattiva base ritmica' : 'Attiva base ritmica'} aria-pressed={rhythmOn}>♩</button><label className="decay-knob" style={{ '--decay-angle': `${-135 + decay * 270}deg` } as React.CSSProperties}><input type="range" min="0.12" max="1" step="0.01" value={decay} onChange={(event) => setDecay(Number(event.target.value))} aria-label="Decay globale" /></label></div></div></section>
     </main>
   );
 }

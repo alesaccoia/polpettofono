@@ -10,7 +10,7 @@
     "build": "if [ \"$VERCEL\" = \"1\" ]; then NITRO_PRESET=vercel vite build; else vinext build; fi",
     "vercel-build": "NITRO_PRESET=vercel vite build",
     "start": "vinext start",
-    "lint": "eslint . --ignore-pattern dist --ignore-pattern .next"
+    "lint": "eslint . --ignore-pattern dist --ignore-pattern .next --ignore-pattern .vercel"
   },
   "dependencies": {
     "next": "16.2.6",
