@@ -18,13 +18,13 @@ const zones: SoundZone[] = [
 const phaseVocoderWorklet = `
 class PhaseMorphProcessor extends AudioWorkletProcessor {
   constructor() {
-    super(); this.sources = []; this.weights = [1, 0, 0, 0]; this.N = 1024; this.H = 256; this.sampleRateValue = sampleRate;
+    super(); this.sources = []; this.weights = [1, 0, 0, 0]; this.decay = 0.5; this.N = 1024; this.H = 256; this.sampleRateValue = sampleRate;
     this.voices = []; this.ring = new Float32Array(16384); this.read = 0; this.available = 0; this.framesUntilNext = 0;
     this.window = new Float32Array(this.N);
     for (let i = 0; i < this.N; i++) this.window[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / this.N);
-    this.port.onmessage = ({ data }) => { if (data.type === 'sources') this.sources = data.sources; if (data.type === 'trigger') { this.weights = data.weights; this.trigger(); } if (data.type === 'release') this.release(); };
+    this.port.onmessage = ({ data }) => { if (data.type === 'sources') this.sources = data.sources; if (data.type === 'trigger') { this.weights = data.weights; if (typeof data.decay === 'number') this.decay = Math.max(0.12, Math.min(1, data.decay)); this.trigger(); } if (data.type === 'release') this.release(); };
   }
-  trigger() { this.ring.fill(0); this.read = 0; this.available = 0; this.framesUntilNext = 0; this.voices = [{ position: 0, remaining: Math.floor(this.sampleRateValue * 1.38), releaseRemaining: null, gain: 0.95 }]; }
+  trigger() { this.ring.fill(0); this.read = 0; this.available = 0; this.framesUntilNext = 0; this.voices = [{ position: 0, remaining: Math.floor(this.sampleRateValue * (0.18 + this.decay * 1.2)), releaseRemaining: null, gain: 0.95 }]; }
   release() { for (const voice of this.voices) voice.releaseRemaining = Math.min(voice.releaseRemaining ?? Infinity, Math.floor(this.sampleRateValue * 0.06)); }
   fft(real, imag, inverse) {
     const n = real.length;
@@ -76,9 +76,9 @@ function scheduleRhythm(audio: AudioRig, step: number) {
 }
 
 export default function Home() {
-  const [active, setActive] = useState<Point>({ x: 47, y: 40 }); const [weights, setWeights] = useState([1, 0, 0, 0]); const [isMuted, setIsMuted] = useState(false);
-  const [sequence, setSequence] = useState<Array<number | null>>([0, null, 1, null, 2, null, 3, null]); const [isSequencing, setIsSequencing] = useState(false); const [sequencerStep, setSequencerStep] = useState(-1);
-  const [harmonyOn, setHarmonyOn] = useState(false); const [rhythmOn, setRhythmOn] = useState(false); const audioRef = useRef<AudioRig | null>(null); const sequenceRef = useRef(sequence); const rhythmTimerRef = useRef<number | null>(null); const isHoldingRef = useRef(false); const harmonyRef = useRef(false); const muteRef = useRef(false);
+  const [active, setActive] = useState<Point>({ x: 47, y: 40 }); const [weights, setWeights] = useState([1, 0, 0, 0]);
+  const [sequence, setSequence] = useState<Array<number | null>>([3, 1, 3, 0, 3, 1, 3, 0]); const [isSequencing, setIsSequencing] = useState(false); const [sequencerStep, setSequencerStep] = useState(-1);
+  const [harmonyOn, setHarmonyOn] = useState(false); const [rhythmOn, setRhythmOn] = useState(false); const [decay, setDecay] = useState(0.5); const [isMuted, setIsMuted] = useState(false); const audioRef = useRef<AudioRig | null>(null); const sequenceRef = useRef(sequence); const rhythmTimerRef = useRef<number | null>(null); const isHoldingRef = useRef(false); const harmonyRef = useRef(false); const muteRef = useRef(false); const decayRef = useRef(decay);
   const activeZone = useMemo(() => zones.reduce((best, zone, index) => weights[index] > weights[zones.indexOf(best)] ? zone : best, zones[0]), [weights]);
 
   const startAudio = useCallback(async () => {
@@ -89,14 +89,14 @@ export default function Home() {
     node.connect(gain).connect(context.destination); node.connect(delay); delay.connect(feedback).connect(delay); delay.connect(fxWet); node.connect(reverb).connect(fxWet); fxWet.connect(gain);
     const sources = buffers.map((buffer) => buffer.getChannelData(0).slice()); node.port.postMessage({ type: 'sources', sources }, sources.map((source) => source.buffer)); audioRef.current = { context, node, gain, fxWet }; return audioRef.current;
   }, []);
-  const triggerWeights = useCallback(async (nextWeights: number[]) => { const audio = await startAudio(); audio.node.port.postMessage({ type: 'trigger', weights: nextWeights }); }, [startAudio]);
+  const triggerWeights = useCallback(async (nextWeights: number[]) => { const audio = await startAudio(); audio.node.port.postMessage({ type: 'trigger', weights: nextWeights, decay: decayRef.current }); }, [startAudio]);
   const releaseSound = useCallback(() => { audioRef.current?.node.port.postMessage({ type: 'release' }); }, []);
   const playPoint = useCallback(async (point: Point) => { const nextWeights = normalizedWeights(point); setActive(point); setWeights(nextWeights); await triggerWeights(nextWeights); }, [triggerWeights]);
   const triggerZone = useCallback(async (zoneIndex: number) => { const zone = zones[zoneIndex]; await playPoint({ x: zone.x, y: zone.y }); }, [playPoint]);
   const toggleSequencer = useCallback(async () => { if (isSequencing) { setIsSequencing(false); setSequencerStep(-1); return; } await startAudio(); setIsSequencing(true); }, [isSequencing, startAudio]);
   const toggleRhythm = useCallback(async () => { if (rhythmOn) { setRhythmOn(false); return; } await startAudio(); setRhythmOn(true); }, [rhythmOn, startAudio]);
 
-  useEffect(() => { sequenceRef.current = sequence; }, [sequence]); useEffect(() => { harmonyRef.current = harmonyOn; }, [harmonyOn]); useEffect(() => { muteRef.current = isMuted; }, [isMuted]);
+  useEffect(() => { sequenceRef.current = sequence; }, [sequence]); useEffect(() => { harmonyRef.current = harmonyOn; }, [harmonyOn]); useEffect(() => { muteRef.current = isMuted; }, [isMuted]); useEffect(() => { decayRef.current = decay; }, [decay]);
   useEffect(() => { if (!isSequencing) return undefined; let cursor = 0; const tick = () => { const zoneIndex = sequenceRef.current[cursor]; setSequencerStep(cursor); if (zoneIndex !== null) void triggerZone(zoneIndex); cursor = (cursor + 1) % sequenceRef.current.length; }; tick(); const interval = window.setInterval(tick, 510); return () => window.clearInterval(interval); }, [isSequencing, triggerZone]);
   useEffect(() => { if (!rhythmOn) { if (rhythmTimerRef.current !== null) window.clearInterval(rhythmTimerRef.current); rhythmTimerRef.current = null; return undefined; } let step = 0; const tick = () => { if (audioRef.current) scheduleRhythm(audioRef.current, step); step = (step + 1) % 8; }; tick(); rhythmTimerRef.current = window.setInterval(tick, 510); return () => { if (rhythmTimerRef.current !== null) window.clearInterval(rhythmTimerRef.current); rhythmTimerRef.current = null; }; }, [rhythmOn]);
   useEffect(() => { if (audioRef.current) audioRef.current.gain.gain.value = isMuted ? 0 : 0.72; }, [isMuted]); useEffect(() => { if (audioRef.current) audioRef.current.fxWet.gain.value = harmonyOn ? 0.38 : 0; }, [harmonyOn]); useEffect(() => () => { audioRef.current?.context.close(); }, []);
@@ -109,7 +109,7 @@ export default function Home() {
     <main className="site-shell">
       <button className="mute-button" onClick={() => setIsMuted((muted) => !muted)} aria-label={isMuted ? 'Attiva audio' : 'Disattiva audio'} aria-pressed={isMuted}>{isMuted ? '◌' : '◉'}</button>
       <section className="photo-stage"><div className="cat-photo-wrap" onPointerDown={handlePointerDown} onPointerUp={handlePointerUp} onPointerCancel={handlePointerUp} onLostPointerCapture={handlePointerUp} role="button" tabIndex={0} aria-label="Tocca la foto del gatto"><img src="/images/cat.jpg" alt="Il gatto del Cattofono" className="cat-photo" draggable={false} /><div className="photo-shade" /><div className="crosshair" style={{ left: `${active.x}%`, top: `${active.y}%` }}><span /><span /></div>{zones.map((zone) => <span key={zone.id} className={`epicenter ${activeZone.id === zone.id ? 'selected' : ''}`} style={{ left: `${zone.x}%`, top: `${zone.y}%`, '--zone-color': zone.color } as React.CSSProperties}><i /></span>)}</div></section>
-      <section className="sequencer-section" aria-label="Sequencer"><div className="seq-panel"><div className="seq-grid">{sequence.map((zoneIndex, index) => <button key={index} className={`seq-step ${sequencerStep === index ? 'playing' : ''} ${zoneIndex === null ? 'empty' : ''}`} onClick={() => cycleStep(index)} aria-label={`Step ${index + 1}: ${zoneIndex === null ? 'vuoto' : zones[zoneIndex].name}`} style={zoneIndex === null ? undefined : { '--step-color': zones[zoneIndex].color } as React.CSSProperties}>{zoneIndex !== null && <i />}</button>)}</div><div className="seq-controls"><button className={`icon-button play ${isSequencing ? 'active' : ''}`} onClick={() => void toggleSequencer()} aria-label={isSequencing ? 'Ferma sequencer' : 'Avvia sequencer'}>{isSequencing ? '■' : '▶'}</button><button className={`icon-button ${harmonyOn ? 'active' : ''}`} onClick={() => setHarmonyOn((value) => !value)} aria-label={harmonyOn ? 'Disattiva delay e riverbero' : 'Attiva delay e riverbero'} aria-pressed={harmonyOn}>♫</button><button className={`icon-button ${rhythmOn ? 'active' : ''}`} onClick={() => void toggleRhythm()} aria-label={rhythmOn ? 'Disattiva base ritmica' : 'Attiva base ritmica'} aria-pressed={rhythmOn}>♩</button></div></div></section>
+      <section className="sequencer-section" aria-label="Sequencer"><div className="seq-panel"><div className="seq-grid">{sequence.map((zoneIndex, index) => <button key={index} className={`seq-step ${sequencerStep === index ? 'playing' : ''} ${zoneIndex === null ? 'empty' : ''}`} onClick={() => cycleStep(index)} aria-label={`Step ${index + 1}: ${zoneIndex === null ? 'vuoto' : zones[zoneIndex].name}`} style={zoneIndex === null ? undefined : { '--step-color': zones[zoneIndex].color } as React.CSSProperties}>{zoneIndex !== null && <i />}</button>)}</div><div className="seq-controls"><button className={`icon-button play ${isSequencing ? 'active' : ''}`} onClick={() => void toggleSequencer()} aria-label={isSequencing ? 'Ferma sequencer' : 'Avvia sequencer'}>{isSequencing ? '■' : '▶'}</button><button className={`icon-button ${harmonyOn ? 'active' : ''}`} onClick={() => setHarmonyOn((value) => !value)} aria-label={harmonyOn ? 'Disattiva delay e riverbero' : 'Attiva delay e riverbero'} aria-pressed={harmonyOn}>♫</button><button className={`icon-button ${rhythmOn ? 'active' : ''}`} onClick={() => void toggleRhythm()} aria-label={rhythmOn ? 'Disattiva base ritmica' : 'Attiva base ritmica'} aria-pressed={rhythmOn}>♩</button><label className="decay-knob" style={{ '--decay-angle': `${-135 + decay * 270}deg` } as React.CSSProperties}><input type="range" min="0.12" max="1" step="0.01" value={decay} onChange={(event) => setDecay(Number(event.target.value))} aria-label="Decay globale" /></label></div></div></section>
     </main>
   );
 }
